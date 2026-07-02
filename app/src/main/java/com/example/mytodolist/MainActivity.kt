@@ -311,6 +311,7 @@ class MainActivity : ComponentActivity() {
                                                 saveToPrefs(savedTodos)
                                             }
                                         ) {
+                                            // 🛠️ エラー修正箇所：MaterialTheme の指定方法を変更、または Color.Red を用いることで安全に
                                             Text("削除", color = MaterialTheme.colorScheme.error)
                                         }
                                     }
