@@ -1,118 +1,323 @@
-package com.example.mytodolist // プロジェクトのパッケージ名に合わせて変更してください
+package com.example.mytodolist
 
+import android.app.TimePickerDialog
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.glance.appwidget.updateAll
+import java.util.Calendar
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
+data class TodoItem(
+    val title: String,
+    val time: String,
+    val isCompleted: Boolean,
+    val priority: String = "中"
+)
 
 class MainActivity : ComponentActivity() {
+    private val refreshTrigger = mutableStateOf(0)
+
+    override fun onResume() {
+        super.onResume()
+        refreshTrigger.value += 1
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val sharedPreferences = getSharedPreferences("todo_prefs_v5", Context.MODE_PRIVATE)
+
         setContent {
             MaterialTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    TodoSimpleScreen()
-                }
-            }
-        }
-    }
-}
+                    val context = LocalContext.current
+                    val savedTodos = remember { mutableStateListOf<TodoItem>() }
 
-@Composable
-fun TodoSimpleScreen() {
-    // ユーザ入力を保持する状態（バリデーション対象）
-    var taskTitleInput by remember { mutableStateOf("") }
+                    val todoComparator = compareBy<TodoItem> { it.isCompleted }
+                        .thenBy {
+                            when (it.priority) {
+                                "高" -> 0
+                                "中" -> 1
+                                else -> 2
+                            }
+                        }
+                        .thenBy { it.time }
 
-    // エラーメッセージを保持する状態（方針4: エラー表示用）
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+                    LaunchedEffect(refreshTrigger.value) {
+                        val count = sharedPreferences.getInt("todo_count", 0)
+                        val list = mutableListOf<TodoItem>()
 
-    // メモリ上でタスク名を管理するリスト（今回は最小限のためStringのリスト）
-    // ※シーケンス図にある「状態を更新してタスク表示」のローカル擬似版です
-    val taskList = remember { mutableStateListOf<String>() }
+                        for (i in 0 until count) {
+                            val title = sharedPreferences.getString("todo_title_$i", "") ?: ""
+                            if (title.isBlank()) continue
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // --- 方針4: ユーザ入力の検証とエラー表示 ---
-        if (errorMessage != null) {
-            Text(
-                text = errorMessage ?: "",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-        }
+                            val time = sharedPreferences.getString("todo_time_$i", "--:--") ?: "--:--"
+                            val isCompleted = sharedPreferences.getBoolean("todo_completed_$i", false)
+                            val priority = sharedPreferences.getString("todo_priority_$i", "中") ?: "中"
 
-        // タスク名 入力欄
-        OutlinedTextField(
-            value = taskTitleInput,
-            onValueChange = {
-                taskTitleInput = it
-                // 文字が入力されたら、自動的にエラー表示を消す親切設計
-                if (it.isNotBlank()) errorMessage = null
-            },
-            label = { Text("タスク名を入力") },
-            isError = errorMessage != null, // エラー時は枠線を赤くする
-            modifier = Modifier.fillMaxWidth()
-        )
+                            list.add(TodoItem(title, time, isCompleted, priority))
+                        }
 
-        Spacer(modifier = Modifier.height(8.dp))
+                        savedTodos.clear()
+                        savedTodos.addAll(list.sortedWith(todoComparator))
+                    }
 
-        // 「追加」ボタン (シーケンス図のイベント10番に相当)
-        Button(
-            onClick = {
-                // --- 方針4: バリデーションチェック ---
-                // シーケンス図 alt [入力値が不正な場合（タスク名が空など）] の再現
-                if (taskTitleInput.trim().isEmpty()) {
-                    errorMessage = "タスク名を入力してください（空欄は不可です）"
-                } else {
-                    // 入力値が正常な場合
-                    taskList.add(taskTitleInput.trim()) // リストに追加
-                    taskTitleInput = "" // 入力欄をクリア
-                    errorMessage = null // エラーをクリア
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("追加")
-        }
+                    var text by remember { mutableStateOf("") }
+                    var selectedTime by remember { mutableStateOf("時間選択") }
+                    var selectedPriority by remember { mutableStateOf("中") }
 
-        Spacer(modifier = Modifier.height(16.dp))
+                    val saveToPrefs = { currentList: List<TodoItem> ->
+                        val editor = sharedPreferences.edit()
+                        editor.clear().commit()
 
-        Text(
-            text = "今日のタスク一覧",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.align(Alignment.Start)
-        )
+                        editor.putInt("todo_count", currentList.size)
+                        currentList.forEachIndexed { index, item ->
+                            editor.putString("todo_title_$index", item.title)
+                            editor.putString("todo_time_$index", item.time)
+                            editor.putBoolean("todo_completed_$index", item.isCompleted)
+                            editor.putString("todo_priority_$index", item.priority)
+                        }
+                        editor.commit()
 
-        Spacer(modifier = Modifier.height(8.dp))
+                        CoroutineScope(Dispatchers.Main).launch {
+                            try {
+                                TodoWidget().updateAll(context)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
 
-        // 即座に追加・表示されるリスト部分
-        LazyColumn(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            items(taskList) { taskName ->
-                Card(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = taskName,
-                        modifier = Modifier.padding(16.dp)
-                    )
+                        try {
+                            val intent = Intent(context, TodoWidgetReceiver::class.java).apply {
+                                action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                            }
+                            val ids = AppWidgetManager.getInstance(context).getAppWidgetIds(
+                                ComponentName(context, TodoWidgetReceiver::class.java)
+                            )
+                            intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
+                            context.sendBroadcast(intent)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                    ) {
+                        Text(
+                            text = "My Todo List",
+                            style = MaterialTheme.typography.headlineMedium,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
+
+                        OutlinedTextField(
+                            value = text,
+                            onValueChange = { text = it },
+                            label = { Text("新しいタスクを入力") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("優先度:", style = MaterialTheme.typography.bodyMedium)
+                            listOf("高", "中", "低").forEach { priority ->
+                                val isSelected = selectedPriority == priority
+                                ElevatedFilterChip(
+                                    selected = isSelected,
+                                    onClick = { selectedPriority = priority },
+                                    label = {
+                                        Text(
+                                            text = priority,
+                                            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.elevatedFilterChipColors(
+                                        selectedContainerColor = when (priority) {
+                                            "高" -> Color(0xFFE53935)
+                                            "中" -> Color(0xFFFB8C00)
+                                            else -> Color(0xFF757575)
+                                        }
+                                    )
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = {
+                                    val calendar = Calendar.getInstance()
+                                    TimePickerDialog(
+                                        context,
+                                        { _, hour, minute ->
+                                            selectedTime = String.format("%02d:%02d", hour, minute)
+                                        },
+                                        calendar.get(Calendar.HOUR_OF_DAY),
+                                        calendar.get(Calendar.MINUTE),
+                                        true
+                                    ).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                            ) {
+                                Text(text = if (selectedTime == "時間選択") "時間を設定" else selectedTime)
+                            }
+
+                            Button(
+                                onClick = {
+                                    if (text.isNotBlank()) {
+                                        val timeToSave = if (selectedTime == "時間選択") "--:--" else selectedTime
+                                        val fixedPriority = selectedPriority
+
+                                        val newList = savedTodos.toMutableList()
+                                        newList.add(
+                                            TodoItem(
+                                                title = text,
+                                                time = timeToSave,
+                                                isCompleted = false,
+                                                priority = fixedPriority
+                                            )
+                                        )
+                                        newList.sortWith(todoComparator)
+
+                                        savedTodos.clear()
+                                        savedTodos.addAll(newList)
+
+                                        saveToPrefs(newList)
+
+                                        text = ""
+                                        selectedTime = "時間選択"
+                                        selectedPriority = "中"
+                                    }
+                                }
+                            ) {
+                                Text("追加")
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                            itemsIndexed(savedTodos, key = { index, todo -> "$index-${todo.title}-${todo.time}" }) { index, todo ->
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Checkbox(
+                                                checked = todo.isCompleted,
+                                                onCheckedChange = { isChecked ->
+                                                    val itemIndex = savedTodos.indexOf(todo)
+                                                    if (itemIndex != -1) {
+                                                        val newList = savedTodos.toMutableList()
+                                                        newList[itemIndex] = todo.copy(isCompleted = isChecked)
+                                                        newList.sortWith(todoComparator)
+
+                                                        savedTodos.clear()
+                                                        savedTodos.addAll(newList)
+
+                                                        saveToPrefs(newList)
+                                                    }
+                                                }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+
+                                            val badgeColor = when (todo.priority) {
+                                                "高" -> Color(0xFFE53935)
+                                                "中" -> Color(0xFFFB8C00)
+                                                else -> Color(0xFF757575)
+                                            }
+                                            Surface(
+                                                color = if (todo.isCompleted) Color.Gray.copy(alpha = 0.3f) else badgeColor,
+                                                shape = MaterialTheme.shapes.small,
+                                                modifier = Modifier.padding(end = 4.dp)
+                                            ) {
+                                                Text(
+                                                    text = todo.priority,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    color = Color.White
+                                                )
+                                            }
+
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.primaryContainer,
+                                                shape = MaterialTheme.shapes.small,
+                                                modifier = Modifier.padding(end = 8.dp)
+                                            ) {
+                                                Text(
+                                                    text = todo.time,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                )
+                                            }
+
+                                            Text(
+                                                text = " ${todo.title}",
+                                                style = LocalTextStyle.current.copy(
+                                                    textDecoration = if (todo.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                                                ),
+                                                color = if (todo.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f) else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+
+                                        TextButton(
+                                            onClick = {
+                                                savedTodos.remove(todo)
+                                                saveToPrefs(savedTodos)
+                                            }
+                                        ) {
+                                            Text("削除", color = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
