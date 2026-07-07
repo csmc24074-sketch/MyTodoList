@@ -53,6 +53,13 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     annotationProcessor("androidx.room:room-compiler:2.6.1")
 
+    // 2. ここを追記（JSON変換を行うためのライブラリ）
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+
+    // ホーム画面ウィジェット用のライブラリ
+    implementation("androidx.glance:glance-appwidget:1.1.0")
+    implementation("androidx.glance:glance-material3:1.1.0")
+
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
@@ -60,12 +67,4 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
-
-    dependencies {
-        // ...（今までの implementation などが並んでいるところの一番下でOKです）...
-
-        // ホーム画面ウィジェット用のライブラリを追加
-        implementation("androidx.glance:glance-appwidget:1.1.0")
-        implementation("androidx.glance:glance-material3:1.1.0")
-    }
 }

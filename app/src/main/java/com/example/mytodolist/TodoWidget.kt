@@ -2,198 +2,224 @@ package com.example.mytodolist
 
 import android.content.Context
 import android.content.Intent
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
-import androidx.glance.Image
-import androidx.glance.ImageProvider
-import androidx.glance.action.ActionParameters
-import androidx.glance.action.actionParametersOf
+import androidx.glance.GlanceTheme
+import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
-import androidx.glance.appwidget.action.ActionCallback
-import androidx.glance.appwidget.action.actionRunCallback
-import androidx.glance.appwidget.provideContent
-import androidx.glance.background
-import androidx.glance.layout.Alignment
-import androidx.glance.layout.Column
-import androidx.glance.layout.Row
-import androidx.glance.layout.Spacer
-import androidx.glance.layout.fillMaxSize
-import androidx.glance.layout.fillMaxWidth
-import androidx.glance.layout.height
-import androidx.glance.layout.padding
-import androidx.glance.layout.width
-import androidx.glance.text.Text
-import androidx.glance.text.TextStyle
-import androidx.glance.text.FontWeight
-import androidx.glance.text.TextDecoration
-import androidx.glance.GlanceTheme
 import androidx.glance.appwidget.SizeMode
+import androidx.glance.appwidget.cornerRadius
+import androidx.glance.appwidget.provideContent
 import androidx.glance.appwidget.updateAll
+import androidx.glance.background
+import androidx.glance.layout.*
+import androidx.glance.text.FontWeight
+import androidx.glance.text.Text
+import androidx.glance.text.TextDecoration
+import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
-import androidx.compose.ui.graphics.Color
+import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import java.util.Calendar
 
 class TodoWidget : GlanceAppWidget() {
 
     override val sizeMode: SizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val sharedPreferences = context.getSharedPreferences("todo_prefs_v5", Context.MODE_PRIVATE)
-        val count = sharedPreferences.getInt("todo_count", 0)
-        val list = mutableListOf<TodoItem>()
+        provideContent {
+            GlanceTheme {
+                var todoItems by remember { mutableStateOf(listOf<TodoItem>()) }
+                val coroutineScope = rememberCoroutineScope()
 
-        for (i in 0 until count) {
-            val title = sharedPreferences.getString("todo_title_$i", "") ?: ""
-            if (title.isBlank()) continue
-            val time = sharedPreferences.getString("todo_time_$i", "--:--") ?: "--:--"
-            val isCompleted = sharedPreferences.getBoolean("todo_completed_$i", false)
-            val priority = sharedPreferences.getString("todo_priority_$i", "中") ?: "中"
+                // 現在の「日付」と「時刻」を取得
+                val currentCalendar = Calendar.getInstance()
+                val currentYear = currentCalendar.get(Calendar.YEAR)
+                val currentMonth = currentCalendar.get(Calendar.MONTH) + 1 // 0から始まるため+1
+                val currentDay = currentCalendar.get(Calendar.DAY_OF_MONTH)
 
-            list.add(TodoItem(title, time, isCompleted, priority))
-        }
+                // 「YYYY/MM/DD」の形式で今日の文字列を作成
+                val todayStr = String.format("%04d/%02d/%02d", currentYear, currentMonth, currentDay)
 
-        val todoItems = list.sortedWith(
-            compareBy<TodoItem> { it.isCompleted }
-                .thenBy {
-                    when (it.priority) {
-                        "高" -> 0
-                        "中" -> 1
-                        else -> 2
+                val currentHour = currentCalendar.get(Calendar.HOUR_OF_DAY)
+                val currentMinute = currentCalendar.get(Calendar.MINUTE)
+
+                LaunchedEffect(Unit) {
+                    context.dataStore.data.collectLatest { prefs ->
+                        val stringSet = prefs[TODO_SET_KEY] ?: emptySet()
+
+                        // ★ 全タスクの中から「今日（todayStr）」のものだけに絞り込む
+                        todoItems = stringSet.mapNotNull { TodoItem.fromRawString(it) }
+                            .filter { it.date == todayStr } // ← ここで今日のタスクだけに限定！
+                            .sortedWith(
+                                compareBy<TodoItem> { it.isCompleted }
+                                    .thenBy {
+                                        when (it.priority) {
+                                            "高" -> 0
+                                            "中" -> 1
+                                            else -> 2
+                                        }
+                                    }
+                                    .thenBy { it.time }
+                            )
                     }
                 }
-                .thenBy { it.time }
-        )
 
-        provideContent {
-            WidgetContent(todoItems)
-        }
-    }
-
-    @Composable
-    private fun WidgetContent(todos: List<TodoItem>) {
-        Column(
-            modifier = GlanceModifier
-                .fillMaxSize()
-                .background(GlanceTheme.colors.background)
-                .padding(16.dp),
-            verticalAlignment = Alignment.Top,
-            horizontalAlignment = Alignment.Start
-        ) {
-            Text(
-                text = "今日のタスク一覧",
-                style = TextStyle(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    color = GlanceTheme.colors.onBackground
-                )
-            )
-
-            Spacer(modifier = GlanceModifier.height(12.dp))
-
-            if (todos.isEmpty()) {
-                Text(
-                    text = "予定はありません",
-                    style = TextStyle(fontSize = 15.sp, color = GlanceTheme.colors.onBackground)
-                )
-            } else {
-                todos.forEach { todo ->
+                Column(
+                    modifier = GlanceModifier
+                        .fillMaxSize()
+                        .background(GlanceTheme.colors.background)
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.Top,
+                    horizontalAlignment = Alignment.Horizontal.Start
+                ) {
                     Row(
                         modifier = GlanceModifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp),
+                            .clickable(actionStartActivity<MainActivity>()),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 🛠️ 修正ポイント：現在の完了状態（isCompleted）もパラメータとして渡す
-                        val paramArgs = actionParametersOf(
-                            ActionParameters.Key<String>("todo_title") to todo.title,
-                            ActionParameters.Key<String>("todo_time") to todo.time,
-                            ActionParameters.Key<Boolean>("todo_completed") to todo.isCompleted
-                        )
-
-                        Image(
-                            provider = ImageProvider(
-                                if (todo.isCompleted) android.R.drawable.checkbox_on_background else android.R.drawable.checkbox_off_background
-                            ),
-                            contentDescription = "Complete",
-                            modifier = GlanceModifier.clickable(
-                                actionRunCallback<CompleteTodoAction>(paramArgs)
-                            )
-                        )
-
-                        Spacer(modifier = GlanceModifier.width(8.dp))
-
-                        val priorityColor = when (todo.priority) {
-                            "高" -> ColorProvider(Color(0xFFE53935))
-                            "中" -> ColorProvider(Color(0xFFFB8C00))
-                            else -> ColorProvider(Color(0xFF757575))
-                        }
-
                         Text(
-                            text = "[${todo.priority}]",
+                            text = "今日のタスク一覧",
                             style = TextStyle(
-                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (todo.isCompleted) GlanceTheme.colors.onBackground else priorityColor
-                            )
+                                fontSize = 20.sp,
+                                color = GlanceTheme.colors.onBackground
+                            ),
+                            modifier = GlanceModifier.defaultWeight()
                         )
-
-                        Spacer(modifier = GlanceModifier.width(4.dp))
-
                         Text(
-                            text = "${todo.time} ${todo.title}",
-                            style = TextStyle(
-                                fontSize = 14.sp,
-                                textDecoration = if (todo.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
-                                color = if (todo.isCompleted) GlanceTheme.colors.secondary else GlanceTheme.colors.onBackground
-                            )
+                            text = "アプリ起動 ↗",
+                            style = TextStyle(fontSize = 13.sp, color = GlanceTheme.colors.secondary)
                         )
+                    }
+
+                    Spacer(modifier = GlanceModifier.height(16.dp))
+
+                    if (todoItems.isEmpty()) {
+                        Text(
+                            text = "今日の予定はありません",
+                            style = TextStyle(
+                                fontSize = 18.sp,
+                                color = GlanceTheme.colors.onBackground
+                            ),
+                            modifier = GlanceModifier.fillMaxWidth().clickable(actionStartActivity<MainActivity>())
+                        )
+                    } else {
+                        todoItems.forEach { todo ->
+                            Row(
+                                modifier = GlanceModifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+
+                                // 丸型チェックボックス
+                                Box(
+                                    modifier = GlanceModifier
+                                        .size(24.dp)
+                                        .cornerRadius(12.dp)
+                                        .background(
+                                            if (todo.isCompleted) GlanceTheme.colors.primary
+                                            else ColorProvider(Color(0xFFE0E0E0))
+                                        )
+                                        .clickable {
+                                            coroutineScope.launch {
+                                                val prefs = context.dataStore.data.first()
+                                                val stringSet = prefs[TODO_SET_KEY] ?: emptySet()
+                                                val currentTodoList = stringSet.mapNotNull { TodoItem.fromRawString(it) }
+
+                                                val updatedList = currentTodoList.map {
+                                                    if (it.id == todo.id) it.copy(isCompleted = !it.isCompleted) else it
+                                                }
+
+                                                val newStringSet = updatedList.map { it.toRawString() }.toSet()
+                                                context.dataStore.edit { preferences ->
+                                                    preferences[TODO_SET_KEY] = newStringSet
+                                                }
+                                                TodoWidget().updateAll(context)
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (todo.isCompleted) {
+                                        Text(
+                                            text = "✓",
+                                            style = TextStyle(
+                                                color = GlanceTheme.colors.onPrimary,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp
+                                            )
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = GlanceModifier.width(12.dp))
+
+                                // 優先度用のカラーバッジ
+                                val badgeColor = when (todo.priority) {
+                                    "高" -> ColorProvider(Color(0xFFE53935))
+                                    "中" -> ColorProvider(Color(0xFFFB8C00))
+                                    else -> ColorProvider(Color(0xFF9E9E9E))
+                                }
+
+                                Box(
+                                    modifier = GlanceModifier
+                                        .size(10.dp)
+                                        .cornerRadius(5.dp)
+                                        .background(if (todo.isCompleted) GlanceTheme.colors.secondary else badgeColor)
+                                ) {}
+
+                                Spacer(modifier = GlanceModifier.width(10.dp))
+
+                                // 期限切れアラートの判定
+                                var isOverdue = false
+                                if (!todo.isCompleted && todo.time != "--:--") {
+                                    val parts = todo.time.split(":")
+                                    if (parts.size == 2) {
+                                        val taskHour = parts[0].toIntOrNull() ?: 0
+                                        val taskMinute = parts[1].toIntOrNull() ?: 0
+                                        if (taskHour < currentHour || (taskHour == currentHour && taskMinute < currentMinute)) {
+                                            isOverdue = true
+                                        }
+                                    }
+                                }
+
+                                val textColor = when {
+                                    todo.isCompleted -> GlanceTheme.colors.secondary
+                                    isOverdue -> ColorProvider(Color(0xFFFF1744))
+                                    else -> GlanceTheme.colors.onBackground
+                                }
+
+                                Text(
+                                    text = "${todo.time}  ${todo.title}",
+                                    style = TextStyle(
+                                        fontSize = 18.sp,
+                                        textDecoration = if (todo.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
+                                        color = textColor
+                                    ),
+                                    modifier = GlanceModifier.defaultWeight().clickable(actionStartActivity<MainActivity>())
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
-    }
-}
-
-class CompleteTodoAction : ActionCallback {
-    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
-        val titleKey = ActionParameters.Key<String>("todo_title")
-        val timeKey = ActionParameters.Key<String>("todo_time")
-        val completedKey = ActionParameters.Key<Boolean>("todo_completed")
-
-        val title = parameters[titleKey] ?: return
-        val time = parameters[timeKey] ?: return
-        val isCurrentlyCompleted = parameters[completedKey] ?: return
-
-        val sharedPreferences = context.getSharedPreferences("todo_prefs_v5", Context.MODE_PRIVATE)
-        val count = sharedPreferences.getInt("todo_count", 0)
-
-        val editor = sharedPreferences.edit()
-        for (i in 0 until count) {
-            val savedTitle = sharedPreferences.getString("todo_title_$i", "")
-            val savedTime = sharedPreferences.getString("todo_time_$i", "--:--")
-            val savedCompleted = sharedPreferences.getBoolean("todo_completed_$i", false)
-
-            // 🛠️ 修正ポイント：タイトル、時間、そして「現在の完了状態」が一致するターゲットを確実に狙い撃つ
-            if (savedTitle == title && savedTime == time && savedCompleted == isCurrentlyCompleted) {
-                editor.putBoolean("todo_completed_$i", !isCurrentlyCompleted) // 状態を確実に反転
-                break
-            }
-        }
-        editor.apply()
-
-        TodoWidget().updateAll(context)
     }
 }
 
 class TodoWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = TodoWidget()
-
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
         MainScope().launch {
